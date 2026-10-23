@@ -26,9 +26,7 @@
 
 
 
-<!-- JSZIP -->
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
 
 
@@ -950,7 +948,7 @@ button:hover {
 
 
 
-            <strong>📝 Upload Word TTD</strong>
+            <strong>🖼️ Upload Foto TTD</strong>
 
 
 
@@ -958,7 +956,7 @@ button:hover {
 
                 type="file"
 
-                id="docxInput"
+                id="imageInput"
 
                 accept=".docx"
 
@@ -980,7 +978,7 @@ button:hover {
 
 
 
-        Silakan upload PDF dan Word TTD.
+        Silakan upload PDF dan foto TTD (JPG/JPEG/PNG).
 
 
 
@@ -1015,23 +1013,10 @@ button:hover {
 
 
     <div class="info">
-
-
-
         <b>Background otomatis:</b>
-
-
-
-        Sistem hanya menghapus background yang
-
-        berwarna putih/putih terang dari foto TTD.
-
-
-
-        Background berwarna lain tidak akan dihapus.
-
-
-
+        Sistem mencoba menghapus background foto dengan warna apa pun
+        menggunakan deteksi warna adaptif dari tepi foto.
+        TTD yang berbeda warna/lebih gelap dari background akan dipertahankan.
     </div>
 
 
@@ -1072,7 +1057,7 @@ button:hover {
 
 
 
-            🪄 Hapus Background Putih
+            🪄 Hapus Background Foto
 
 
 
@@ -1801,747 +1786,496 @@ async function renderPDF() {
 
 /* =====================================================
 
-   UPLOAD DOCX
+   UPLOAD FOTO TTD
 
 ===================================================== */
 
-
-
 document
-
-.getElementById("docxInput")
-
+.getElementById("imageInput")
 .addEventListener("change", async function(e) {
 
-
-
-
-
-    const file =
-
-    e.target.files[0];
-
-
-
-
+    const file = e.target.files[0];
 
     if (!file) return;
 
-
-
-
-
-    setStatus(
-
-        "⏳ Mengambil gambar TTD dari Word..."
-
-    );
-
-
-
-
-
-    try {
-
-
-
-
-
-        const arrayBuffer =
-
-        await file.arrayBuffer();
-
-
-
-
-
-        const zip =
-
-        await JSZip.loadAsync(
-
-            arrayBuffer
-
-        );
-
-
-
-
-
-        let imageFile = null;
-
-
-
-
-
-        /*
-
-         Cari gambar pertama
-
-         di dalam Word
-
-        */
-
-
-
-        for (
-
-            const path in zip.files
-
-        ) {
-
-
-
-
-
-            if (
-
-
-
-                path.startsWith(
-
-                    "word/media/"
-
-                )
-
-
-
-                &&
-
-
-
-                /\.(png|jpg|jpeg|webp)$/i
-
-                .test(path)
-
-
-
-            ) {
-
-
-
-
-
-                imageFile =
-
-                zip.files[path];
-
-
-
-
-
-                break;
-
-
-
-            }
-
-
-
-        }
-
-
-
-
-
-        if (!imageFile) {
-
-
-
-            throw new Error(
-
-                "Tidak ditemukan foto TTD di Word."
-
-            );
-
-
-
-        }
-
-
-
-
-
-        const imageBlob =
-
-        await imageFile.async("blob");
-
-
-
-
-
-        const imageURL =
-
-        URL.createObjectURL(
-
-            imageBlob
-
-        );
-
-
-
-
-
-        await removeWhiteBackground(
-
-            imageURL
-
-        );
-
-
-
-
-
-        URL.revokeObjectURL(
-
-            imageURL
-
-        );
-
-
-
-
-
-        setStatus(
-
-            "✅ TTD berhasil diambil dari Word."
-
-        );
-
-
-
-
-
-    } catch(error) {
-
-
-
-
-
-        console.error(error);
-
-
-
-
-
-        setStatus(
-
-            "❌ Gagal mengambil TTD: " +
-
-            error.message
-
-        );
-
-
-
+    if (!/^image\/(jpeg|png)$/i.test(file.type)) {
+        alert("Silakan pilih foto TTD JPG/JPEG atau PNG.");
+        e.target.value = "";
+        return;
     }
 
+    setStatus("⏳ Membaca foto TTD...");
 
+    try {
+        const url = URL.createObjectURL(file);
 
+        await removePhotoBackground(url);
+
+        URL.revokeObjectURL(url);
+
+        setStatus(
+            "✅ Foto TTD berhasil dibaca dan background diproses."
+        );
+
+    } catch(error) {
+        console.error(error);
+
+        setStatus(
+            "❌ Gagal membaca foto TTD: " +
+            error.message
+        );
+    }
 });
-
-
 
 
 
 /* =====================================================
 
-   REMOVE WHITE BACKGROUND
+   SMART PHOTO BACKGROUND REMOVAL
 
 ===================================================== */
 
+/*
+   Background dipelajari dari tepi foto. Beberapa warna tepi
+   digunakan sekaligus agar background putih, biru, abu-abu,
+   krem, hijau, dan warna lain dapat diproses.
 
+   Catatan:
+   Hasil terbaik didapat jika background menyentuh tepi foto
+   dan warna tinta TTD cukup berbeda dari background.
+*/
 
-async function removeWhiteBackground(url) {
+async function removePhotoBackground(url) {
 
+    const img = await loadImage(url);
 
+    const sourceCanvas = document.createElement("canvas");
 
-
-
-    const img =
-
-    await loadImage(url);
-
-
-
-
-
-    const sourceCanvas =
-
-    document.createElement("canvas");
-
-
-
-
-
-    const sourceCtx =
-
-    sourceCanvas.getContext(
-
+    const sourceCtx = sourceCanvas.getContext(
         "2d",
-
-        {
-
-            willReadFrequently: true
-
-        }
-
+        { willReadFrequently: true }
     );
 
+    const MAX_SIZE = 1800;
 
+    let width = img.naturalWidth;
+    let height = img.naturalHeight;
 
+    const scale =
+        Math.min(
+            1,
+            MAX_SIZE / Math.max(width, height)
+        );
 
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
 
-    sourceCanvas.width =
-
-    img.naturalWidth;
-
-
-
-
-
-    sourceCanvas.height =
-
-    img.naturalHeight;
-
-
-
-
+    sourceCanvas.width = width;
+    sourceCanvas.height = height;
 
     sourceCtx.drawImage(
-
         img,
-
         0,
-
-        0
-
+        0,
+        width,
+        height
     );
 
-
-
-
-
-    const imageData =
-
-    sourceCtx.getImageData(
-
+    const imageData = sourceCtx.getImageData(
         0,
-
         0,
-
-        sourceCanvas.width,
-
-        sourceCanvas.height
-
+        width,
+        height
     );
 
+    const data = imageData.data;
 
+    const sensitivity =
+        Number(
+            document.getElementById("bgSensitivity")?.value || 65
+        );
 
+    // Ambil banyak sampel dari tepi foto.
+    const samples = [];
 
+    const step = Math.max(
+        2,
+        Math.floor(Math.min(width, height) / 80)
+    );
 
-    const data =
-
-    imageData.data;
-
-
-
-
-
-    /*
-
-       Hanya putih/putih terang
-
-       yang dibuat transparan.
-
-
-
-       Tidak menggunakan deteksi
-
-       warna biru khusus.
-
-    */
-
-
-
-    for (
-
-        let i = 0;
-
-        i < data.length;
-
-        i += 4
-
-    ) {
-
-
-
-
-
-        const r =
-
-        data[i];
-
-
-
-
-
-        const g =
-
-        data[i + 1];
-
-
-
-
-
-        const b =
-
-        data[i + 2];
-
-
-
-
-
-        /*
-
-           Tingkat "putih".
-
-
-
-           Jika ketiga channel
-
-           mendekati 255,
-
-           dianggap background.
-
-        */
-
-
-
-        const minimum =
-
-        Math.min(r, g, b);
-
-
-
-
-
-        const average =
-
-        (r + g + b) / 3;
-
-
-
-
-
-        /*
-
-           Selisih RGB kecil berarti
-
-           warna cenderung putih/abu-abu.
-
-
-
-           Tapi kita hanya hapus
-
-           jika benar-benar sangat terang.
-
-        */
-
-
-
-        const colorDifference =
-
-        Math.max(r, g, b) -
-
-        Math.min(r, g, b);
-
-
-
-
+    function addSample(x, y) {
 
         if (
+            x < 0 ||
+            y < 0 ||
+            x >= width ||
+            y >= height
+        ) return;
 
+        const i = (y * width + x) * 4;
 
+        samples.push([
+            data[i],
+            data[i + 1],
+            data[i + 2]
+        ]);
+    }
 
-            minimum >= 235
+    for (let x = 0; x < width; x += step) {
+        addSample(x, 0);
+        addSample(x, height - 1);
+    }
 
+    for (let y = 0; y < height; y += step) {
+        addSample(0, y);
+        addSample(width - 1, y);
+    }
 
+    const clusters = [];
 
-            &&
+    function colorDistance(a, b) {
 
+        const dr = a[0] - b[0];
+        const dg = a[1] - b[1];
+        const db = a[2] - b[2];
 
+        return Math.sqrt(
+            dr * dr * 0.9 +
+            dg * dg * 1.1 +
+            db * db * 0.9
+        );
+    }
 
-            average >= 242
+    // Kelompokkan warna background yang ditemukan di tepi.
+    for (const sample of samples) {
 
+        let nearest = null;
+        let nearestDistance = Infinity;
 
+        for (const cluster of clusters) {
 
-            &&
+            const d =
+                colorDistance(
+                    sample,
+                    cluster.center
+                );
 
+            if (d < nearestDistance) {
+                nearestDistance = d;
+                nearest = cluster;
+            }
+        }
 
-
-            colorDifference <= 15
-
-
-
+        if (
+            !nearest ||
+            nearestDistance > 35
         ) {
 
+            clusters.push({
+                center: [...sample],
+                count: 1
+            });
 
+        } else {
 
+            nearest.count++;
 
+            const n = nearest.count;
+
+            nearest.center[0] +=
+                (sample[0] - nearest.center[0]) / n;
+
+            nearest.center[1] +=
+                (sample[1] - nearest.center[1]) / n;
+
+            nearest.center[2] +=
+                (sample[2] - nearest.center[2]) / n;
+        }
+    }
+
+    clusters.sort(
+        (a, b) => b.count - a.count
+    );
+
+    const bgColors =
+        clusters
+        .slice(0, 12)
+        .map(c => c.center);
+
+    if (!bgColors.length) {
+        bgColors.push([255, 255, 255]);
+    }
+
+    function nearestBackgroundDistance(rgb) {
+
+        let min = Infinity;
+
+        for (const bg of bgColors) {
+
+            const d =
+                colorDistance(
+                    rgb,
+                    bg
+                );
+
+            if (d < min) {
+                min = d;
+            }
+        }
+
+        return min;
+    }
+
+    const hardThreshold = sensitivity;
+
+    const softThreshold =
+        Math.max(
+            8,
+            sensitivity - 25
+        );
+
+    /*
+       Transparansi bertahap menjaga tepi TTD tetap halus.
+    */
+    for (
+        let i = 0;
+        i < data.length;
+        i += 4
+    ) {
+
+        const rgb = [
+            data[i],
+            data[i + 1],
+            data[i + 2]
+        ];
+
+        const distance =
+            nearestBackgroundDistance(rgb);
+
+        if (distance <= softThreshold) {
 
             data[i + 3] = 0;
 
-
-
-
-
-        }
-
-
-
-        /*
-
-           Anti-aliasing:
-
-           warna sangat terang dibuat
-
-           semi-transparan supaya pinggir
-
-           TTD tidak terlihat kotak putih.
-
-        */
-
-
-
-        else if (
-
-
-
-            minimum >= 220
-
-
-
-            &&
-
-
-
-            average >= 232
-
-
-
-            &&
-
-
-
-            colorDifference <= 20
-
-
-
-        ) {
-
-
-
-
+        } else if (distance < hardThreshold) {
 
             const alpha =
-
-            255 -
-
-            Math.round(
-
-                (
-
-                    average - 220
-
-                ) /
-
-                20 *
-
-                255
-
-            );
-
-
-
-
+                Math.round(
+                    (
+                        distance - softThreshold
+                    ) /
+                    (
+                        hardThreshold - softThreshold
+                    ) *
+                    255
+                );
 
             data[i + 3] =
-
-            Math.max(
-
-                0,
-
-                Math.min(
-
-                    255,
-
-                    alpha
-
-                )
-
-            );
-
-
-
+                Math.max(
+                    0,
+                    Math.min(
+                        255,
+                        alpha
+                    )
+                );
         }
-
-
-
     }
-
-
-
-
 
     sourceCtx.putImageData(
-
         imageData,
-
         0,
-
         0
-
     );
-
-
-
-
 
     /*
-
-       Auto crop area kosong.
-
+       Tahap kedua: hapus background yang masih tersambung
+       ke tepi foto. Ini membantu background bertekstur.
     */
-
-
-
-    const cropped =
-
-    cropTransparentArea(
-
-        sourceCanvas
-
-    );
-
-
-
-
-
-    /*
-
-       Ubah menjadi PNG
-
-       agar transparency tersimpan.
-
-    */
-
-
-
-    const blob =
-
-    await canvasToBlob(
-
-        cropped,
-
-        "image/png"
-
-    );
-
-
-
-
-
-    processedTtdData =
-
-    await blob.arrayBuffer();
-
-
-
-
-
-    if (processedTtdUrl) {
-
-
-
-        URL.revokeObjectURL(
-
-            processedTtdUrl
-
+    const cleanedCanvas =
+        removeConnectedBackground(
+            sourceCanvas,
+            bgColors,
+            sensitivity
         );
 
+    const cropped =
+        cropTransparentArea(
+            cleanedCanvas
+        );
 
+    const blob =
+        await canvasToBlob(
+            cropped,
+            "image/png"
+        );
 
+    if (!blob) {
+        throw new Error(
+            "Browser gagal membuat PNG transparan."
+        );
     }
 
+    processedTtdData =
+        await blob.arrayBuffer();
 
-
-
+    if (processedTtdUrl) {
+        URL.revokeObjectURL(
+            processedTtdUrl
+        );
+    }
 
     processedTtdUrl =
-
-    URL.createObjectURL(
-
-        blob
-
-    );
-
-
-
-
-
-    /*
-
-       Preview TTD
-
-    */
-
-
+        URL.createObjectURL(blob);
 
     ttdPreview.src =
-
-    processedTtdUrl;
-
-
-
-
+        processedTtdUrl;
 
     ttdPreview.style.display =
+        "block";
 
-    "block";
-
-
-
-
-
-    /*
-
-       Masukkan ke dua TTD
-
-    */
-
-
-
-    setupSignature(
-
-        signature1
-
-    );
-
-
-
-
-
-    setupSignature(
-
-        signature2
-
-    );
-
-
-
+    setupSignature(signature1);
+    setupSignature(signature2);
 }
 
 
+
+/*
+   Flood-fill dari tepi foto.
+   Hanya warna yang mirip background yang boleh dihapus.
+*/
+function removeConnectedBackground(
+    canvas,
+    bgColors,
+    sensitivity
+) {
+
+    const ctx =
+        canvas.getContext(
+            "2d",
+            { willReadFrequently: true }
+        );
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    const imageData =
+        ctx.getImageData(
+            0,
+            0,
+            width,
+            height
+        );
+
+    const data = imageData.data;
+
+    const visited =
+        new Uint8Array(
+            width * height
+        );
+
+    const queueX = [];
+    const queueY = [];
+
+    function colorDistance(a, b) {
+
+        const dr = a[0] - b[0];
+        const dg = a[1] - b[1];
+        const db = a[2] - b[2];
+
+        return Math.sqrt(
+            dr * dr * 0.9 +
+            dg * dg * 1.1 +
+            db * db * 0.9
+        );
+    }
+
+    function bgDistance(index) {
+
+        const rgb = [
+            data[index],
+            data[index + 1],
+            data[index + 2]
+        ];
+
+        let min = Infinity;
+
+        for (const bg of bgColors) {
+
+            const d =
+                colorDistance(
+                    rgb,
+                    bg
+                );
+
+            if (d < min) {
+                min = d;
+            }
+        }
+
+        return min;
+    }
+
+    function push(x, y) {
+
+        if (
+            x < 0 ||
+            y < 0 ||
+            x >= width ||
+            y >= height
+        ) return;
+
+        const p = y * width + x;
+
+        if (visited[p]) return;
+
+        visited[p] = 1;
+
+        queueX.push(x);
+        queueY.push(y);
+    }
+
+    for (let x = 0; x < width; x++) {
+        push(x, 0);
+        push(x, height - 1);
+    }
+
+    for (let y = 0; y < height; y++) {
+        push(0, y);
+        push(width - 1, y);
+    }
+
+    let head = 0;
+
+    while (head < queueX.length) {
+
+        const x = queueX[head];
+        const y = queueY[head];
+
+        head++;
+
+        const index =
+            (y * width + x) * 4;
+
+        if (
+            bgDistance(index) <= sensitivity
+        ) {
+
+            data[index + 3] = 0;
+
+            push(x + 1, y);
+            push(x - 1, y);
+            push(x, y + 1);
+            push(x, y - 1);
+        }
+    }
+
+    ctx.putImageData(
+        imageData,
+        0,
+        0
+    );
+
+    return canvas;
+}
 
 
 
@@ -4381,7 +4115,7 @@ document
 
                 alert(
 
-                    "Silakan upload Word TTD terlebih dahulu."
+                    "Silakan upload foto TTD JPG/JPEG/PNG terlebih dahulu."
 
                 );
 
@@ -4945,266 +4679,78 @@ document
 
 ===================================================== */
 
-
-
 document
-
 .getElementById("processBtn")
-
 .addEventListener(
-
     "click",
-
     async function() {
 
-
-
-
-
         const file =
-
-        document
-
-        .getElementById(
-
-            "docxInput"
-
-        )
-
-        .files[0];
-
-
-
-
+            document
+            .getElementById("imageInput")
+            .files[0];
 
         if (!file) {
 
-
-
             alert(
-
-                "Upload Word TTD terlebih dahulu."
-
+                "Upload foto TTD JPG/JPEG/PNG terlebih dahulu."
             );
 
-
-
             return;
-
-
-
         }
 
-
-
-
-
         setStatus(
-
-            "⏳ Memproses ulang TTD..."
-
+            "⏳ Memproses ulang background foto..."
         );
-
-
-
-
 
         try {
 
-
-
-
-
-            const arrayBuffer =
-
-            await file.arrayBuffer();
-
-
-
-
-
-            const zip =
-
-            await JSZip.loadAsync(
-
-                arrayBuffer
-
-            );
-
-
-
-
-
-            let imageFile = null;
-
-
-
-
-
-            for (
-
-                const path in zip.files
-
-            ) {
-
-
-
-
-
-                if (
-
-
-
-                    path.startsWith(
-
-                        "word/media/"
-
-                    )
-
-
-
-                    &&
-
-
-
-                    /\.(png|jpg|jpeg|webp)$/i
-
-                    .test(path)
-
-
-
-                ) {
-
-
-
-
-
-                    imageFile =
-
-                    zip.files[path];
-
-
-
-
-
-                    break;
-
-
-
-                }
-
-
-
-            }
-
-
-
-
-
-            if (!imageFile) {
-
-
-
-                throw new Error(
-
-                    "Foto TTD tidak ditemukan."
-
-                );
-
-
-
-            }
-
-
-
-
-
-            const blob =
-
-            await imageFile.async(
-
-                "blob"
-
-            );
-
-
-
-
-
             const url =
+                URL.createObjectURL(file);
 
-            URL.createObjectURL(
+            await removePhotoBackground(url);
 
-                blob
-
-            );
-
-
-
-
-
-            await removeWhiteBackground(
-
-                url
-
-            );
-
-
-
-
-
-            URL.revokeObjectURL(
-
-                url
-
-            );
-
-
-
-
+            URL.revokeObjectURL(url);
 
             setStatus(
-
-                "✅ Background putih TTD berhasil dihapus."
-
+                "✅ Background foto berhasil diproses ulang."
             );
-
-
-
-
 
         } catch(error) {
 
-
-
-
-
             console.error(error);
 
-
-
-
-
             setStatus(
-
-                "❌ " +
-
-                error.message
-
+                "❌ " + error.message
             );
-
-
-
         }
-
-
-
     }
-
 );
 
 
+/* =====================================================
 
+   SENSITIVITY DISPLAY
+
+===================================================== */
+
+const bgSensitivity =
+    document.getElementById("bgSensitivity");
+
+const bgSensitivityValue =
+    document.getElementById("bgSensitivityValue");
+
+if (bgSensitivity) {
+
+    bgSensitivity.addEventListener(
+        "input",
+        function() {
+
+            bgSensitivityValue.textContent =
+                bgSensitivity.value;
+        }
+    );
+}
 
 
 </script>
